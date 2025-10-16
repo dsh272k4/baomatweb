@@ -9,131 +9,115 @@ import { verifyToken, requireAdmin } from "../middleware/auth.js";
 const router = express.Router();
 const logDir = path.resolve("logs");
 const adminLogPath = path.join(logDir, "admin.log");
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
 
-// Đảm bảo thư mục logs tồn tại
-if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir);
-}
-
-// ✅ Ghi log hành động admin
 function logAdminAction(admin, action, target) {
-    const logMsg = `[${new Date().toISOString()}] ${admin} -> ${action} user ${target}\n`;
+    const now = new Date();
+    const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000); // cộng thêm 7 tiếng
+    const formatted = vnTime.toISOString().replace("T", " ").substring(0, 19);
+    const logMsg = `[${formatted}] ${admin} -> ${action} ${target}\n`;
+
+    console.log("📜 Ghi log admin:", logMsg.trim());
     fs.appendFileSync(adminLogPath, logMsg);
 }
 
-// ✅ Lấy danh sách người dùng
-router.get("/users", verifyToken, requireAdmin, async (req, res) => {
+
+// GET /admin/users
+router.get("/admin/users", verifyToken, requireAdmin, async (req, res) => {
     try {
-        const [rows] = await pool.query("SELECT id, username, role, is_locked, created_at FROM users");
+        const [rows] = await pool.query("SELECT id, username, role, is_locked, created_at FROM users ORDER BY id DESC");
         res.json(rows);
     } catch (err) {
-        console.error("❌ Lỗi lấy danh sách user:", err);
-        res.status(500).json({ message: "Lỗi máy chủ" });
+        console.error("Get users error:", err);
+        res.status(500).json({ message: "Server error" });
     }
 });
 
-// ✅ Thêm người dùng mới
-router.post("/users", verifyToken, requireAdmin, async (req, res) => {
-    const { username, password, role } = req.body;
-    if (!username || !password)
-        return res.status(400).json({ message: "Thiếu thông tin đăng ký" });
-
+// POST /admin/users
+router.post("/admin/users", verifyToken, requireAdmin, async (req, res) => {
     try {
+        const { username, password, role } = req.body;
+        if (!username || !password) return res.status(400).json({ message: "username & password required" });
         const [exists] = await pool.query("SELECT id FROM users WHERE username=?", [username]);
-        if (exists.length > 0) return res.status(400).json({ message: "Tên đăng nhập đã tồn tại" });
+        if (exists.length) return res.status(400).json({ message: "Username already exists" });
 
-        const hash = bcrypt.hashSync(password, 10);
-        await pool.query(
-            "INSERT INTO users (username, password_hash, role, is_locked, created_at) VALUES (?, ?, ?, 0, NOW())",
-            [username, hash, role || "user"]
-        );
-
-        logAdminAction(req.user.username, "Thêm", username);
-        res.json({ message: "Thêm người dùng thành công" });
+        const hash = await bcrypt.hash(password, 10);
+        await pool.query("INSERT INTO users (username, password_hash, role, is_locked, created_at) VALUES (?, ?, ?, 0, NOW())", [username, hash, role || "user"]);
+        logAdminAction(req.user.username, "Create", username);
+        res.json({ message: "User created" });
     } catch (err) {
-        console.error("❌ Lỗi thêm user:", err);
-        res.status(500).json({ message: "Lỗi máy chủ" });
+        console.error("Create user error:", err);
+        res.status(500).json({ message: "Server error" });
     }
 });
 
-// ✅ Cập nhật thông tin người dùng
-router.put("/users/:id", verifyToken, requireAdmin, async (req, res) => {
-    const { id } = req.params;
-    const { username, role } = req.body;
-
+// PUT /admin/users/:id
+router.put("/admin/users/:id", verifyToken, requireAdmin, async (req, res) => {
     try {
-        const [exists] = await pool.query(
-            "SELECT id FROM users WHERE username = ? AND id != ?",
-            [username, id]
-        );
-        if (exists.length > 0)
-            return res.status(400).json({ message: "Tên đăng nhập đã tồn tại" });
+        const id = req.params.id;
+        const { username, role } = req.body;
+        if (!username) return res.status(400).json({ message: "username required" });
+
+        const [exists] = await pool.query("SELECT id FROM users WHERE username = ? AND id != ?", [username, id]);
+        if (exists.length) return res.status(400).json({ message: "Username already exists" });
 
         await pool.query("UPDATE users SET username=?, role=? WHERE id=?", [username, role, id]);
-
-        logAdminAction(req.user.username, "Cập nhật", `ID ${id} (${username})`);
-        res.json({ message: "Cập nhật người dùng thành công" });
+        logAdminAction(req.user.username, "Update", `ID ${id} (${username})`);
+        res.json({ message: "User updated" });
     } catch (err) {
-        console.error("❌ Lỗi cập nhật user:", err);
-        res.status(500).json({ message: "Lỗi máy chủ" });
+        console.error("Update user error:", err);
+        res.status(500).json({ message: "Server error" });
     }
 });
 
-// ✅ Khóa / Mở khóa người dùng
-router.put("/users/:id/lock", verifyToken, requireAdmin, async (req, res) => {
-    const { id } = req.params;
-    const { lock } = req.body;
-
+// PUT /admin/users/:id/lock
+router.put("/admin/users/:id/lock", verifyToken, requireAdmin, async (req, res) => {
     try {
+        const id = req.params.id;
+        const { lock } = req.body;
         await pool.query("UPDATE users SET is_locked = ? WHERE id = ?", [lock ? 1 : 0, id]);
-        logAdminAction(req.user.username, lock ? "Khóa" : "Mở khóa", `ID ${id}`);
-        res.json({ message: "Cập nhật trạng thái người dùng thành công" });
+        logAdminAction(req.user.username, lock ? "Lock" : "Unlock", `ID ${id}`);
+        res.json({ message: lock ? "User locked" : "User unlocked" });
     } catch (err) {
-        console.error("❌ Lỗi khóa/mở user:", err);
-        res.status(500).json({ message: "Lỗi máy chủ" });
+        console.error("Lock user error:", err);
+        res.status(500).json({ message: "Server error" });
     }
 });
 
-// ✅ Xóa người dùng
-router.delete("/users/:id", verifyToken, requireAdmin, async (req, res) => {
-    const { id } = req.params;
-
+// PUT /admin/users/:id/reset-password
+router.put("/admin/users/:id/reset-password", verifyToken, requireAdmin, async (req, res) => {
     try {
-        const [user] = await pool.query("SELECT username FROM users WHERE id=?", [id]);
-        if (user.length === 0) return res.status(404).json({ message: "Không tìm thấy user" });
+        const id = req.params.id;
+        const { newPassword } = req.body;
+        if (!newPassword || newPassword.length < 6) return res.status(400).json({ message: "Password must be >= 6 chars" });
+
+        const [rows] = await pool.query("SELECT username FROM users WHERE id=?", [id]);
+        if (!rows.length) return res.status(404).json({ message: "User not found" });
+
+        const hash = await bcrypt.hash(newPassword, 10);
+        await pool.query("UPDATE users SET password_hash=? WHERE id=?", [hash, id]);
+        logAdminAction(req.user.username, "ResetPassword", `${rows[0].username} (ID ${id})`);
+        res.json({ message: "Password reset" });
+    } catch (err) {
+        console.error("Reset password error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
+// DELETE /admin/users/:id
+router.delete("/admin/users/:id", verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const [rows] = await pool.query("SELECT username FROM users WHERE id=?", [id]);
+        if (!rows.length) return res.status(404).json({ message: "User not found" });
 
         await pool.query("DELETE FROM users WHERE id=?", [id]);
-        logAdminAction(req.user.username, "Xóa", `${user[0].username} (ID ${id})`);
-
-        res.json({ message: "Đã xóa người dùng" });
+        logAdminAction(req.user.username, "Delete", `${rows[0].username} (ID ${id})`);
+        res.json({ message: "User deleted" });
     } catch (err) {
-        console.error("❌ Lỗi xóa user:", err);
-        res.status(500).json({ message: "Lỗi máy chủ" });
+        console.error("Delete user error:", err);
+        res.status(500).json({ message: "Server error" });
     }
 });
-// ✅ Đặt lại mật khẩu người dùng
-router.put("/users/:id/reset-password", verifyToken, requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { newPassword } = req.body;
-
-  if (!newPassword || newPassword.length < 6) {
-    return res.status(400).json({ message: "Mật khẩu mới phải có ít nhất 6 ký tự" });
-  }
-
-  try {
-    const [user] = await pool.query("SELECT username FROM users WHERE id = ?", [id]);
-    if (user.length === 0) return res.status(404).json({ message: "Không tìm thấy user" });
-
-    const hash = bcrypt.hashSync(newPassword, 10);
-    await pool.query("UPDATE users SET password_hash=? WHERE id=?", [hash, id]);
-
-    logAdminAction(req.user.username, "Reset mật khẩu", `${user[0].username} (ID ${id})`);
-    res.json({ message: "Đặt lại mật khẩu thành công" });
-  } catch (err) {
-    console.error("❌ Lỗi đặt lại mật khẩu:", err);
-    res.status(500).json({ message: "Lỗi máy chủ" });
-  }
-});
-
 
 export default router;

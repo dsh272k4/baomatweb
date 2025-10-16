@@ -1,25 +1,39 @@
+// middleware/waf.js
 import fs from "fs";
 import path from "path";
 
-const wafLogPath = path.resolve("logs", "waf.log");
+const logDir = path.resolve("logs");
+const wafLog = path.join(logDir, "waf.log");
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
 
 export function simpleWAF(req, res, next) {
     try {
-        const bodyData = JSON.stringify(req.body || {});
-        const queryData = JSON.stringify(req.query || {});
-        const payload = (bodyData + queryData).toUpperCase();
+        const bodyText = JSON.stringify(req.body || {});
+        const queryText = JSON.stringify(req.query || {});
+        const payload = (bodyText + queryText).toUpperCase();
 
-        const malicious = ["DROP", "DELETE", "INSERT", "<SCRIPT>", "SELECT", "--", "OR 1=1"];
-        const found = malicious.find(p => payload.includes(p));
+        const blacklist = [
+            "DROP TABLE",
+            "UNION SELECT",
+            "--",
+            "/*",
+            "*/",
+            "XP_CMDSHELL",
+            "<SCRIPT>",
+            "ALERT(",
+            "OR 1=1",
+            "SLEEP(",
+            "BENCHMARK("
+        ];
 
+        const found = blacklist.find((p) => payload.includes(p));
         if (found) {
-            const log = `[${new Date().toISOString()}] 🚫 WAF chặn yêu cầu: ${req.ip} - từ khóa: ${found}\n`;
-            fs.appendFileSync(wafLogPath, log);
-            return res.status(403).json({ message: "Yêu cầu bị chặn bởi WAF" });
+            const log = `[${new Date().toISOString()}] BLOCKED IP=${req.ip} PATTERN=${found} PATH=${req.path}\n`;
+            fs.appendFileSync(wafLog, log);
+            return res.status(403).json({ message: "Request blocked by WAF" });
         }
-
-        next();
     } catch (err) {
-        next();
+        console.error("WAF error:", err);
     }
+    next();
 }
