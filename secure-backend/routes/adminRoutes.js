@@ -1,10 +1,13 @@
-// routes/adminRoutes.js
 import express from "express";
 import bcrypt from "bcrypt";
 import fs from "fs";
 import path from "path";
 import { pool } from "../config/db.js";
 import { verifyToken, requireAdmin } from "../middleware/auth.js";
+import {
+    validatePasswordStrength,
+    updatePasswordHistory
+} from "../middleware/passwordPolicy.js";
 
 const router = express.Router();
 const logDir = path.resolve("logs");
@@ -21,11 +24,10 @@ function logAdminAction(admin, action, target) {
     fs.appendFileSync(adminLogPath, logMsg);
 }
 
-
 // GET /admin/users
 router.get("/admin/users", verifyToken, requireAdmin, async (req, res) => {
     try {
-        const [rows] = await pool.query("SELECT id, username, role, is_locked, created_at FROM users ORDER BY id DESC");
+        const [rows] = await pool.query("SELECT id, username, role, is_locked, created_at, password_changed_at FROM users ORDER BY id DESC");
         res.json(rows);
     } catch (err) {
         console.error("Get users error:", err);
@@ -38,11 +40,27 @@ router.post("/admin/users", verifyToken, requireAdmin, async (req, res) => {
     try {
         const { username, password, role } = req.body;
         if (!username || !password) return res.status(400).json({ message: "username & password required" });
+
+        // Kiểm tra mật khẩu mạnh
+        const strengthCheck = validatePasswordStrength(password);
+        if (!strengthCheck.isValid) {
+            return res.status(400).json({
+                message: "Password is not strong enough",
+                errors: strengthCheck.errors
+            });
+        }
+
         const [exists] = await pool.query("SELECT id FROM users WHERE username=?", [username]);
         if (exists.length) return res.status(400).json({ message: "Username already exists" });
 
-        const hash = await bcrypt.hash(password, 10);
-        await pool.query("INSERT INTO users (username, password_hash, role, is_locked, created_at) VALUES (?, ?, ?, 0, NOW())", [username, hash, role || "user"]);
+        const hash = await bcrypt.hash(password, 12);
+        const now = new Date();
+
+        await pool.query(
+            "INSERT INTO users (username, password_hash, role, is_locked, created_at, password_changed_at) VALUES (?, ?, ?, 0, NOW(), ?)",
+            [username, hash, role || "user", now]
+        );
+
         logAdminAction(req.user.username, "Create", username);
         res.json({ message: "User created" });
     } catch (err) {
@@ -89,15 +107,37 @@ router.put("/admin/users/:id/reset-password", verifyToken, requireAdmin, async (
     try {
         const id = req.params.id;
         const { newPassword } = req.body;
-        if (!newPassword || newPassword.length < 6) return res.status(400).json({ message: "Password must be >= 6 chars" });
+
+        if (!newPassword) {
+            return res.status(400).json({ message: "Vui lòng cung cấp mật khẩu mới" });
+        }
+
+        // Kiểm tra độ mạnh mật khẩu
+        const strengthCheck = validatePasswordStrength(newPassword);
+        if (!strengthCheck.isValid) {
+            return res.status(400).json({
+                message: "Mật khẩu mới không đủ mạnh",
+                errors: strengthCheck.errors
+            });
+        }
 
         const [rows] = await pool.query("SELECT username FROM users WHERE id=?", [id]);
         if (!rows.length) return res.status(404).json({ message: "User not found" });
 
-        const hash = await bcrypt.hash(newPassword, 10);
-        await pool.query("UPDATE users SET password_hash=? WHERE id=?", [hash, id]);
+        const hash = await bcrypt.hash(newPassword, 12);
+        const now = new Date();
+
+        await pool.query(
+            "UPDATE users SET password_hash=?, password_changed_at=?, failed_login_attempts=0, lockout_until=NULL WHERE id=?",
+            [hash, now, id]
+        );
+
+        // Cập nhật lịch sử mật khẩu
+        await updatePasswordHistory(id, hash, pool);
+
         logAdminAction(req.user.username, "ResetPassword", `${rows[0].username} (ID ${id})`);
-        res.json({ message: "Password reset" });
+        res.json({ message: "Password reset successfully" });
+
     } catch (err) {
         console.error("Reset password error:", err);
         res.status(500).json({ message: "Server error" });

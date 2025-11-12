@@ -50,3 +50,9 @@
 [2025-10-14 20:06:52] dsh272k4 -> Lock ID 11
 [2025-10-14 20:18:24] admin -> Lock ID 9
 [2025-10-14 20:35:55] admin -> Unlock ID 9
+[2025-10-16 20:03:56] dsh272k4 -> Lock ID 14
+[2025-10-16 20:04:00] dsh272k4 -> ResetPassword dsh272k43 (ID 15)
+[2025-11-05 20:29:38] dsh272k4 -> ResetPassword zxcvbn (ID 9)
+[2025-11-12 16:30:14] dsh272k4 -> Lock ID 13
+[2025-11-12 16:30:15] dsh272k4 -> Unlock ID 13
+[2025-11-12 16:31:00] dsh272k4 -> ResetPassword admin2 (ID 12)

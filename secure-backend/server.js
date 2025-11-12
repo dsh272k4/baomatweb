@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -9,6 +8,8 @@ import path from "path";
 
 import { pool } from "./config/db.js";
 import { simpleWAF } from "./middleware/waf.js";
+import { checkPasswordExpiry } from "./middleware/passwordPolicy.js";
+import { verifyToken } from "./middleware/auth.js";
 import authRoutes from "./routes/authRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import logRoutes from "./routes/logRoutes.js";
@@ -36,6 +37,9 @@ app.use("/api", authRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", logRoutes);
 
+// Thêm middleware kiểm tra hết hạn mật khẩu cho các route cần auth
+app.use("/api", verifyToken, checkPasswordExpiry);
+
 // health
 app.get("/health", (req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
@@ -45,9 +49,17 @@ async function ensureAdmin() {
     try {
         const [rows] = await pool.query("SELECT id FROM users WHERE role='admin' LIMIT 1");
         if (rows.length === 0) {
-            const hash = await bcrypt.hash("Admin123", 10);
-            await pool.query("INSERT INTO users (username, password_hash, role, is_locked, created_at) VALUES (?, ?, 'admin', 0, NOW())", ["admin", hash]);
-            console.log("✅ Default admin created (username: admin, password: Admin123)");
+            // Sử dụng mật khẩu mạnh mặc định
+            const strongPassword = process.env.DEFAULT_ADMIN_PASSWORD || "Admin@Secure123!";
+            const hash = await bcrypt.hash(strongPassword, 12);
+            const now = new Date();
+
+            await pool.query(
+                "INSERT INTO users (username, password_hash, role, is_locked, created_at, password_changed_at) VALUES (?, ?, 'admin', 0, NOW(), ?)",
+                ["admin", hash, now]
+            );
+            console.log("✅ Default admin created (username: admin)");
+            console.log("⚠️  Please change the default admin password immediately!");
         }
     } catch (err) {
         console.error("Ensure admin error:", err);
@@ -58,4 +70,4 @@ ensureAdmin();
 // start
 app.listen(PORT, () => {
     console.log(`✅ Backend running on http://localhost:${PORT}`);
-});
+}); 

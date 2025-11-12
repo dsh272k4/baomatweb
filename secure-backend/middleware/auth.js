@@ -1,4 +1,4 @@
-// middleware/auth.js
+// secure-backend/middleware/auth.js
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 dotenv.config();
